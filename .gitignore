@@ -1,0 +1,48 @@
+# Archivos de configuración con variables de entorno
+.env
+config.py
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Archivos de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Archivos de registro
+*.log
+logs/
+
+# Directorios virtuales
+venv/
+ENV/
+env/
+
+# Archivos de IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
