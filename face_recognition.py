@@ -116,103 +116,61 @@ class FaceRecognition:
         if len(faces_opencv) == 0:
             return []
         
-        # Convertir frame a formato compatible con AWS Rekognition
-        _, img_encoded = cv2.imencode('.jpg', frame)
-        img_bytes = img_encoded.tobytes()
+        # Lista para almacenar los resultados
+        results = []
         
-        try:
-            logger.info("Enviando imagen a AWS Rekognition para búsqueda de rostros...")
-            # Buscar coincidencias en la colección
-            response = self.rekognition.search_faces_by_image(
-                CollectionId=self.collection_id,
-                Image={'Bytes': img_bytes},
-                MaxFaces=10,  # Aumentado para detectar más rostros
-                FaceMatchThreshold=self.similarity_threshold
-            )
-            
-            # Verificar si hay rostros detectados por AWS
-            if 'FaceMatches' not in response or 'SearchedFaceBoundingBox' not in response:
-                logger.warning("AWS no detectó ningún rostro en la imagen")
-                # Devolver rostros no reconocidos
-                return [(x, y, w, h, False, "No autorizado") for (x, y, w, h) in faces_opencv]
-            
-            # Obtener información de los rostros detectados por AWS
-            face_matches = response.get('FaceMatches', [])
-            aws_face_box = response.get('SearchedFaceBoundingBox', {})
-            
-            # Convertir coordenadas relativas de AWS a píxeles
-            aws_x = int(aws_face_box.get('Left', 0) * frame.shape[1])
-            aws_y = int(aws_face_box.get('Top', 0) * frame.shape[0])
-            aws_w = int(aws_face_box.get('Width', 0) * frame.shape[1])
-            aws_h = int(aws_face_box.get('Height', 0) * frame.shape[0])
-            
-            logger.info(f"Respuesta de AWS: {len(face_matches)} coincidencias encontradas")
-            logger.info(f"AWS detectó rostro en: ({aws_x}, {aws_y}, {aws_w}, {aws_h})")
-            
-            # Si no hay coincidencias, devolver rostros no reconocidos
-            if len(face_matches) == 0:
-                logger.warning("No se encontraron coincidencias en la colección")
-                return [(x, y, w, h, False, "No autorizado") for (x, y, w, h) in faces_opencv]
-            
-            # Encontrar el rostro de OpenCV que mejor coincide con el rostro detectado por AWS
-            best_match_index = -1
-            best_iou = 0
-            
-            for i, (x, y, w, h) in enumerate(faces_opencv):
-                # Calcular IoU (Intersection over Union)
-                x_overlap = max(0, min(x+w, aws_x+aws_w) - max(x, aws_x))
-                y_overlap = max(0, min(y+h, aws_y+aws_h) - max(y, aws_y))
-                overlap_area = x_overlap * y_overlap
-                area1 = w * h
-                area2 = aws_w * aws_h
+        # Procesar cada rostro detectado por OpenCV individualmente
+        for i, (x, y, w, h) in enumerate(faces_opencv):
+            try:
+                # Recortar el rostro del frame
+                face_img = frame[y:y+h, x:x+w]
                 
-                if area1 + area2 - overlap_area > 0:  # Evitar división por cero
-                    iou = overlap_area / float(area1 + area2 - overlap_area)
-                    
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_match_index = i
-            
-            # Procesar cada coincidencia encontrada
-            results = []
-            
-            # Si encontramos una buena coincidencia entre AWS y OpenCV
-            if best_match_index >= 0 and best_iou > 0.3:  # Umbral de IoU
-                # Obtener el rostro de OpenCV que mejor coincide con AWS
-                x, y, w, h = faces_opencv[best_match_index]
-                
-                # Obtener la mejor coincidencia de AWS
-                best_aws_match = face_matches[0]  # La primera coincidencia es la mejor
-                face = best_aws_match['Face']
-                external_id = face.get('ExternalImageId', 'Desconocido')
-                similarity = best_aws_match['Similarity']
-                
-                logger.info(f"Rostro reconocido: {external_id} (Similitud: {similarity:.2f}%, IoU: {best_iou:.2f})")
-                results.append((x, y, w, h, True, f"{external_id} ({similarity:.1f}%)"))
-                
-                # Marcar este rostro como procesado
-                processed_faces = [best_match_index]
-            else:
-                processed_faces = []
-                logger.warning(f"No se encontró buena coincidencia entre AWS y OpenCV (mejor IoU: {best_iou:.2f})")
-            
-            # Añadir rostros no reconocidos
-            for i, (x, y, w, h) in enumerate(faces_opencv):
-                if i not in processed_faces:
+                # Verificar que la imagen recortada no esté vacía
+                if face_img.size == 0:
+                    logger.warning(f"Imagen de rostro vacía para el rostro {i}")
                     results.append((x, y, w, h, False, "No autorizado"))
-            
-            return results
+                    continue
+                    
+                # Convertir rostro recortado a formato compatible con AWS Rekognition
+                _, img_encoded = cv2.imencode('.jpg', face_img)
+                img_bytes = img_encoded.tobytes()
                 
-        except self.rekognition.exceptions.InvalidParameterException:
-            # No se detectaron rostros en la imagen
-            logger.warning("AWS no pudo procesar la imagen - No se detectaron rostros")
-            # Devolver rostros no reconocidos
-            return [(x, y, w, h, False, "No autorizado") for (x, y, w, h) in faces_opencv]
-        except Exception as e:
-            logger.error(f"Error al comparar rostros: {e}")
-            # Devolver rostros no reconocidos en caso de error
-            return [(x, y, w, h, False, "Error") for (x, y, w, h) in faces_opencv]
-    
+                logger.info(f"Enviando rostro {i} a AWS Rekognition para búsqueda...")
+                
+                # Buscar coincidencias en la colección para este rostro específico
+                response = self.rekognition.search_faces_by_image(
+                    CollectionId=self.collection_id,
+                    Image={'Bytes': img_bytes},
+                    MaxFaces=1,  # Solo necesitamos la mejor coincidencia para este rostro
+                    FaceMatchThreshold=self.similarity_threshold
+                )
+                
+                # Verificar si hay coincidencias para este rostro
+                if 'FaceMatches' in response and len(response['FaceMatches']) > 0:
+                    # Obtener la mejor coincidencia
+                    best_match = response['FaceMatches'][0]
+                    face = best_match['Face']
+                    external_id = face.get('ExternalImageId', 'Desconocido')
+                    similarity = best_match['Similarity']
+                    
+                    logger.info(f"Rostro {i} reconocido: {external_id} (Similitud: {similarity:.2f}%)")
+                    results.append((x, y, w, h, True, f"{external_id} ({similarity:.1f}%)"))
+                else:
+                    # No se encontraron coincidencias para este rostro
+                    logger.info(f"Rostro {i} no reconocido")
+                    results.append((x, y, w, h, False, "No autorizado"))
+                    
+            except self.rekognition.exceptions.InvalidParameterException:
+                # AWS no pudo procesar este rostro
+                logger.warning(f"AWS no pudo procesar el rostro {i}")
+                results.append((x, y, w, h, False, "No autorizado"))
+            except Exception as e:
+                # Error general
+                logger.error(f"Error al procesar el rostro {i}: {e}")
+                results.append((x, y, w, h, False, "Error"))
+        
+        return results
+                
     def process_frame(self, frame):
         """
         Procesar un frame de video para detectar y reconocer rostros
